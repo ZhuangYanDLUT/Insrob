@@ -1,0 +1,173 @@
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <ros/ros.h>                 // 包含ROS的头文件
+#include <boost/asio.hpp>            //包含boost库函数
+#include <math.h>
+#include "gps_pub/imu_gps.h"         //ros消息中的String类型
+
+using namespace std;
+using namespace boost::asio;    //定义一个命名空间，用于后面的读写操作
+
+string head;
+string timeUTC;
+string latitude;
+string northORsouth;
+string longitude;
+string eastORwest;
+string GPSstatus;
+string satelliteNum;
+string HDOP;
+string altitude;
+string altitudeUnit;
+string geiod;
+string geiodUnit;
+string rtkAge;
+string rtkID;
+int	   BCC;
+
+/*string split*/
+void SplitString(const std::string& s, std::vector<std::string>& v, const std::string& c)
+{
+  std::string::size_type pos1, pos2;
+  pos2 = s.find(c);
+  pos1 = 0;
+  while(std::string::npos != pos2)
+  {
+    v.push_back(s.substr(pos1, pos2-pos1));
+
+    pos1 = pos2 + c.size();
+    pos2 = s.find(c, pos1);
+  }
+  if(pos1 != s.length())
+    v.push_back(s.substr(pos1));
+}
+
+int main(int argc, char** argv) {
+
+    ros::init(argc, argv, "gps_node");       //初始化节点
+    ros::NodeHandle n;
+    ros::Publisher chatter_pub = n.advertise<gps_pub::imu_gps>("gps_imu", 1000);
+
+    /*硬件定义*/
+    io_service iosev;
+    serial_port sp(iosev, "/dev/ttyUSB0");
+    sp.set_option(serial_port::baud_rate(115200));
+    sp.set_option(serial_port::flow_control(serial_port::flow_control::none));
+    sp.set_option(serial_port::parity(serial_port::parity::none));
+    sp.set_option(serial_port::stop_bits(serial_port::stop_bits::one));
+    sp.set_option(serial_port::character_size(8));
+    iosev.run();  //打开传输端口    
+
+    //stringstream ss;
+
+    // ofstream writeFile;
+    // const char *filePath="/home/ubuntu/Desktop/outfile.txt";
+    // writeFile.open(filePath);
+
+    ros::Rate loop_rate(10);
+    while (ros::ok()) {
+        ///取出一部分数据
+        boost::asio::streambuf buf;
+        read_until(sp,buf,"\r\n");
+        boost::asio::streambuf::const_buffers_type cbt = buf.data();
+        std::string request_data1(boost::asio::buffers_begin(cbt), boost::asio::buffers_end(cbt));
+        // cout<<request_data1;
+        // cout<<dec<<request_data1.size()<<endl;
+        // string request_data="$GPGGA,,,,,,0,,,,,,,,*66";
+        // string request_data1="$GPGGA,085743.10,3853.1008,N,12131.7041,E,2,11,1.3,30.88,M,8.60,M,99,0000*6A\r\n";
+        cout << request_data1 ;
+        //搜索包头
+        bool packetHeadIsOk=false;
+        int packetHeadKey;
+        for(int i=0;i<request_data1.size();i++){
+            if(request_data1[i]=='$'){
+                string str;
+                ss.clear();
+                ss<<request_data1[i+1]<<request_data1[i+2]<<request_data1[i+3]<<request_data1[i+4]<<request_data1[i+5];
+                ss>>str;
+                if(str=="GPGGA"){
+                    packetHeadIsOk=true;
+                    packetHeadKey=i;
+                    break;
+                }else{
+                    cout<<"未找到包头"<<endl;
+                }
+            }
+        }
+        //取出一帧
+        string request_data;
+        if(packetHeadIsOk){
+            //cout<<"正在取出一帧"<<endl;
+            for(int i=packetHeadKey;request_data1[i]!='\r';i++){
+                request_data += request_data1[i];
+            }
+            ///cout<<request_data<<endl;
+        }
+        //cout<<request_data.size()<<endl;
+
+        /*BCC校验（异或校验）*/
+        int a = request_data[1];
+        int i=2;
+        for(;request_data[i]!='*';i++){
+            a ^= request_data[i];
+        }
+        ss.clear();
+        ss<<hex<<request_data[i+1]<<request_data[i+2];
+        ss>>BCC;
+        /*判断是否通过校验*/
+        bool bccOk=false;
+        if(BCC==a){
+            bccOk=true;
+        }else{
+            cout<<"校验失败"<<endl;
+            return 1;
+        }
+        /*通过校验则提取数据*/
+        if(bccOk){
+            /*分割一帧数据*/
+            vector <string> v_str;
+            SplitString(request_data,v_str,",");
+            /*for(int i=0; i<v_str.size(); i++){
+                cout<<"v_str["<<i<<"]="<<v_str[i]<<endl;
+            }*/
+            head =          v_str[0];
+            timeUTC =       v_str[1];
+            latitude =      v_str[2];
+            northORsouth =  v_str[3];
+            longitude =     v_str[4];
+            eastORwest=     v_str[5];
+            GPSstatus=      v_str[6];
+            satelliteNum=   v_str[7];
+            HDOP=           v_str[8];
+            altitude=       v_str[9];
+            altitudeUnit=   v_str[10];
+            geiod=          v_str[11];
+            geiodUnit=      v_str[12];
+            rtkAge=         v_str[13];
+            vector <string> v_str1;
+            SplitString(v_str[14],v_str1,"*");
+            //cout<<"v_str1[0]="<<v_str1[0]<<" "<<"v_str1[1]="<<v_str1[1]<<endl;
+            rtkID=          v_str1[0];
+
+
+            /*发布消息*/
+
+            gps_pub::imu_gps msg;
+            msg.GPSstatus= GPSstatus;
+            msg.latitude = latitude+northORsouth;
+            msg.longitude= longitude+eastORwest;
+            msg.altitude = altitude+altitudeUnit;
+            //ROS_INFO("%s %s %s %s", msg.GPSstatus.c_str(),msg.longitude.c_str(),msg.latitude.c_str(),msg.altitude.c_str());
+            chatter_pub.publish(msg);
+
+            ros::spinOnce();
+            loop_rate.sleep();
+        }
+    }
+    writeFile.close();
+    cout << "end" << endl;*/*/*/
+    }
+    return 0;
+}

@@ -1,0 +1,106 @@
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <iostream>
+#include <cstring>
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <ros/ros.h>	// 包含ROS的头文件
+// #include <boost/asio.hpp>	//包含boost库函数
+#include <cmath>
+#include "gps_pub/imu_gps.h"	//ros消息中的String类型
+#include "include/serial_port.h"
+#include "include/protocol.h"
+
+using namespace std;
+//using namespace boost::asio;	//定义一个命名空间，用于后面的读写操作
+
+int main(int argc, char** argv) {
+	ros::init(argc, argv, "gps_node");	//初始化节点
+	ros::NodeHandle n;
+	ros::Publisher chatter_pub = n.advertise<gps_pub::imu_gps>("gps_imu", 1000);
+
+	/*global parameters*/
+	struct termios options;
+	char recvBuf[1];
+	const char* port = "/dev/ttyUSB0";
+	int fd;
+	string requestData1;
+	stringstream ss;
+
+	while(ros::ok()){		//the largest circle
+		/*open serial port circle*/
+		while(ros::ok()){
+			if(serialPortOpen(fd,port)){
+				break;
+			}
+			sleep(1);
+		}
+		/*set serial port*/
+		if(!serialPortSet(fd,115200,0,8,1,'N')){	//(fd,baudrate,flowcontrol,databits,stopbit,parity)
+			cout << "serialPortSet Error!" << endl;
+		}
+		/*read serial port*/
+		string buff;
+		ros::Rate loop_rate(10);
+		while(ros::ok()){			
+			read(fd,recvBuf,1);
+			if (tcgetattr(fd,&options) != 0){
+				perror("设备拔出");
+				close(fd);
+				break;
+			}
+			if(*recvBuf == '$'){	//packet head
+				while(ros::ok()){
+					buff += recvBuf[0];
+					read(fd,recvBuf,1);
+					if (tcgetattr(fd,&options) != 0){
+						perror("设备拔出");
+						close(fd);
+						break;
+					}
+					if(*recvBuf == '\n'){
+						read(fd,recvBuf,1);
+						if (tcgetattr(fd,&options) != 0){
+						perror("设备拔出");
+						close(fd);
+						break;
+						}
+						requestData1 = buff;
+						buff.clear();
+						if(bccCheck(requestData1)){
+							extractData(requestData1);
+						}
+						//发布消息
+						gps_pub::imu_gps msg;
+						msg.head            = head;
+						msg.timeUTC         = timeUTC;
+						msg.latitude        = latitude;
+						msg.northORsouth    = northORsouth;
+						msg.longitude       = longitude;
+						msg.eastORwest      = eastORwest;
+						msg.GPSstatus       = GPSstatus;
+						msg.satelliteNum    = satelliteNum;
+						msg.HDOP            = HDOP;
+						msg.altitude        = altitude;
+						msg.altitudeUnit    = altitudeUnit;
+						msg.geiod           = geiod;
+						msg.geiodUnit       = geiodUnit;
+						msg.rtkAge          = rtkAge;
+						msg.rtkID           = rtkID;
+						msg.BCC             = BCC;
+						ROS_INFO("%s %s %s %s", msg.GPSstatus.c_str(),msg.longitude.c_str(),
+						 						msg.latitude.c_str(),msg.altitude.c_str());
+						chatter_pub.publish(msg);
+						ros::spinOnce();
+					}
+				}				
+			}
+			loop_rate.sleep();			
+		}
+		serialPortClose(fd);
+	}
+	return 0;
+}
